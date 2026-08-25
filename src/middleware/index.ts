@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 
-import type { Claims } from "../types/users";
+import type { Claims } from "../types/user";
 
 export const JWT_SECRET = "secret";
 
