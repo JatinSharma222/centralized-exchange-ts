@@ -42,6 +42,7 @@ export class Ordebook {
                 const bucketPrice = Number(askPrices[i]);
                 if (price >= bucketPrice) {
                     let individualOrders = this.orderbook.asks.get(bucketPrice.toString())!;
+                    const toRemove = new Set<number>();
                     for (let j = 0; j < individualOrders?.orders.length; j++) {
                         let sellerOrder = individualOrders?.orders[j]!;
                         let leftQty = sellerOrder.qty - sellerOrder.filledQty;
@@ -71,9 +72,14 @@ export class Ordebook {
                                 price: bucketPrice
                             });
                             originalUserLeftQty -= leftQty;
-                            individualOrders.orders = individualOrders.orders.filter(x => x.orderId !== individualOrders?.orders[j]!.orderId);
+                            toRemove.add(sellerOrder.orderId);
                         }
                     }
+
+                    if (toRemove.size > 0) {
+                        individualOrders.orders = individualOrders.orders.filter(x => !toRemove.has(x.orderId));
+                    }
+
                     if (originalUserLeftQty == 0) {
                         break;
                     }
@@ -114,6 +120,7 @@ export class Ordebook {
                 const bucketPrice = Number(bidPrices[i]);
                 if (price <= bucketPrice) {
                     let individualOrders = this.orderbook.bids.get(bucketPrice.toString())!;
+                    const toRemove = new Set<number>();
                     for (let j = 0; j < individualOrders?.orders.length; j++) {
                         let buyerOrder = individualOrders?.orders[j]!;
                         let leftQty = buyerOrder.qty - buyerOrder.filledQty;
@@ -143,9 +150,14 @@ export class Ordebook {
                                 price: bucketPrice
                             });
                             originalUserLeftQty -= leftQty;
-                            individualOrders.orders = individualOrders.orders.filter(x => x.orderId !== individualOrders?.orders[j]!.orderId);
+                            toRemove.add(buyerOrder.orderId);
                         }
                     }
+
+                    if (toRemove.size > 0) {
+                        individualOrders.orders = individualOrders.orders.filter(x => !toRemove.has(x.orderId));
+                    }
+
                     if (originalUserLeftQty == 0) {
                         break;
                     }
