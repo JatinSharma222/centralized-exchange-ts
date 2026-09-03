@@ -13,7 +13,7 @@ import type {
     SignupResponse,
     User
 } from "../types/user";
-import { AuthorityType } from "@solana/spl-token";
+// import { AuthorityType } from "@solana/spl-token";
 import { Ordebook } from "../orderbook";
 
 export const router = Router();
@@ -196,8 +196,8 @@ router.post("/order", authMiddleware, (req: AuthRequest, res) => {
 
                 if (fill.type == "orderbook_update") {
                     stockBalances.get(userId)!.set("sol", {
-                        available: stockBalances.get(fill.buyer)!.get("sol")!.available - fill.qty,
-                        locked: stockBalances.get(fill.buyer)!.get("sol")!.locked + fill.qty
+                        available: stockBalances.get(fill.userId)!.get("sol")!.available - fill.qty,
+                        locked: stockBalances.get(fill.userId)!.get("sol")!.locked + fill.qty
                     })
                 }
             })

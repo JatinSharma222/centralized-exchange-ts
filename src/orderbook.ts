@@ -46,7 +46,9 @@ export class Ordebook {
                         let sellerOrder = individualOrders?.orders[j]!;
                         let leftQty = sellerOrder.qty - sellerOrder.filledQty;
                         if (leftQty >= originalUserLeftQty) {
-                            individualOrders?.orders[j].filledQty += originalUserLeftQty;
+                            const order = individualOrders.orders[j];
+                            if (!order) continue;
+                            order.filledQty += originalUserLeftQty;
                             fills.push({
                                 type: "fill",
                                 buyer: userId,
@@ -79,9 +81,9 @@ export class Ordebook {
 
             if (originalUserLeftQty) {
                 if (!this.orderbook.bids.get(price.toString())) {
-                    this.orderbook.bids.get(price.toString()) = {
+                    this.orderbook.bids.set(price.toString(), {
                         orders: []
-                    }
+                    });
                 }
 
                 this.orderbook.bids.get(price.toString())?.orders.push({
@@ -113,7 +115,9 @@ export class Ordebook {
                         let buyerOrder = individualOrders?.orders[j]!;
                         let leftQty = buyerOrder.qty - buyerOrder.filledQty;
                         if (leftQty >= originalUserLeftQty) {
-                            individualOrders?.orders[j].filledQty += originalUserLeftQty;
+                            const order = individualOrders.orders[j];
+                            if (!order) continue;
+                            order.filledQty += originalUserLeftQty;
                             fills.push({
                                 type: "fill",
                                 seller: userId,
@@ -146,9 +150,9 @@ export class Ordebook {
 
             if (originalUserLeftQty != 0) {
                 if (!this.orderbook.asks.get(price.toString())) {
-                    this.orderbook.asks.get(price.toString()) = {
+                    this.orderbook.asks.set(price.toString(), {
                         orders: []
-                    }
+                    });
                 }
 
                 this.orderbook.asks.get(price.toString())?.orders.push({
