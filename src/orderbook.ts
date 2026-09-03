@@ -58,6 +58,9 @@ export class Ordebook {
                             });
 
                             originalUserLeftQty = 0;
+                            if(order.filledQty === order.qty) {
+                                individualOrders.orders = individualOrders.orders.filter(x => x.orderId !== individualOrders?.orders[j]!.orderId);
+                            }
                             break;
                         } else {
                             fills.push({
@@ -68,7 +71,7 @@ export class Ordebook {
                                 price: bucketPrice
                             });
                             originalUserLeftQty -= leftQty;
-                            individualOrders.orders = individualOrders.orders.filter(x => x.orderId == individualOrders?.orders[j]?.orderId);
+                            individualOrders.orders = individualOrders.orders.filter(x => x.orderId !== individualOrders?.orders[j]!.orderId);
                         }
                     }
                     if (originalUserLeftQty == 0) {
@@ -127,6 +130,9 @@ export class Ordebook {
                             });
 
                             originalUserLeftQty = 0;
+                            if(order.filledQty === order.qty) {
+                                individualOrders.orders = individualOrders.orders.filter(x => x.orderId !== individualOrders?.orders[j]!.orderId);
+                            }
                             break;
                         } else {
                             fills.push({
@@ -137,7 +143,7 @@ export class Ordebook {
                                 price: bucketPrice
                             });
                             originalUserLeftQty -= leftQty;
-                            individualOrders.orders = individualOrders.orders.filter(x => x.orderId == individualOrders?.orders[j]?.orderId);
+                            individualOrders.orders = individualOrders.orders.filter(x => x.orderId !== individualOrders?.orders[j]!.orderId);
                         }
                     }
                     if (originalUserLeftQty == 0) {

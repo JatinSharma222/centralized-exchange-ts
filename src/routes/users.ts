@@ -166,6 +166,7 @@ router.post("/order", authMiddleware, (req: AuthRequest, res) => {
             res.status(411).json({
                 message: "You have insufficient stocks"
             })
+            return
         }
 
         if (body.asset === "sol") {
@@ -179,8 +180,8 @@ router.post("/order", authMiddleware, (req: AuthRequest, res) => {
                     });
 
                     stockBalances.get(fill.seller)!.set("sol", {
-                        available: stockBalances.get(fill.buyer)!.get("sol")!.available - fill.qty,
-                        locked: stockBalances.get(fill.buyer)!.get("sol")!.locked
+                        available: stockBalances.get(fill.seller)!.get("sol")!.available - fill.qty,
+                        locked: stockBalances.get(fill.seller)!.get("sol")!.locked
                     })
 
                     usdBalances.set(userId, {
@@ -203,4 +204,7 @@ router.post("/order", authMiddleware, (req: AuthRequest, res) => {
             })
         }
     }
+  res.status(200).json({
+    message: "Successfully placed order"
+  })  
 })
