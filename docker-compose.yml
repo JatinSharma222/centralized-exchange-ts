@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:alpine
+    container_name: postgres-exchange
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: exchange
+    volumes:
+      - postgres_exchange_data:/var/lib/postgresql
+
+  redis:
+    image: redis:alpine
+    container_name: redis-exchange
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_exchange_data:/data
+
+volumes:
+  postgres_exchange_data:
+  redis_exchange_data:

@@ -26,6 +26,10 @@ const stockBalances: Map<number, Map<String, { available: number, locked: number
 
 const SOL_ORDERBOOK = new Ordebook("sol");
 
+function getStockBalance(userId: number, asset: string) {
+    return stockBalances.get(userId)!.get(asset) ?? { available: 0, locked: 0 };
+}
+
 router.post("/signup", (req, res) => {
     const body = req.body as SignupInput;
 
@@ -129,15 +133,18 @@ router.post("/order", authMiddleware, (req: AuthRequest, res) => {
             let fills = SOL_ORDERBOOK.addOrder(userId, "bid", body.price, body.qty);
             fills.forEach(fill => {
                 if (fill.type == "fill") {
+                    
+                    const buyerSol = getStockBalance(fill.buyer, "sol");
                     stockBalances.get(fill.buyer)!.set("sol", {
-                        available: stockBalances.get(fill.buyer)!.get("sol")!.available + fill.qty,
-                        locked: stockBalances.get(fill.buyer)!.get("sol")!.locked
+                        available: buyerSol.available + fill.qty,
+                        locked: buyerSol.locked
                     });
 
+                    const sellerSol = getStockBalance(fill.seller, "sol");
                     stockBalances.get(fill.seller)!.set("sol", {
-                        available: stockBalances.get(fill.buyer)!.get("sol")!.available,
-                        locked: stockBalances.get(fill.buyer)!.get("sol")!.locked -= fill.qty
-                    })
+                        available: sellerSol.available,
+                        locked: sellerSol.locked - fill.qty
+                    });
 
                     usdBalances.set(userId, {
                         available: usdBalances.get(userId)!.available - fill.price * fill.qty,
@@ -174,32 +181,37 @@ router.post("/order", authMiddleware, (req: AuthRequest, res) => {
 
             fills.forEach(fill => {
                 if (fill.type == "fill") {
+
+                    const buyerSol = getStockBalance(fill.buyer, "sol");
                     stockBalances.get(fill.buyer)!.set("sol", {
-                        available: stockBalances.get(fill.buyer)!.get("sol")!.available + fill.qty,
-                        locked: stockBalances.get(fill.buyer)!.get("sol")!.locked
+                        available: buyerSol.available + fill.qty,
+                        locked: buyerSol.locked
                     });
 
+                    const sellerSol = getStockBalance(fill.seller, "sol");
                     stockBalances.get(fill.seller)!.set("sol", {
-                        available: stockBalances.get(fill.seller)!.get("sol")!.available - fill.qty,
-                        locked: stockBalances.get(fill.seller)!.get("sol")!.locked
-                    })
+                        available: sellerSol.available,
+                        locked: sellerSol.locked - fill.qty
+                    });
 
                     usdBalances.set(userId, {
                         available: usdBalances.get(userId)!.available + fill.price * fill.qty,
                         locked: usdBalances.get(userId)!.locked
                     });
 
-                    usdBalances.set(fill.seller, {
-                        available: usdBalances.get(fill.seller)!.available,
-                        locked: usdBalances.get(fill.seller)!.locked - fill.price * fill.qty
-                    });
+                    usdBalances.set(fill.buyer, {
+                    available: usdBalances.get(fill.buyer)!.available,
+                    locked: usdBalances.get(fill.buyer)!.locked - fill.price * fill.qty
+                });
                 }
 
                 if (fill.type == "orderbook_update") {
-                    stockBalances.get(userId)!.set("sol", {
-                        available: stockBalances.get(fill.userId)!.get("sol")!.available - fill.qty,
-                        locked: stockBalances.get(fill.userId)!.get("sol")!.locked + fill.qty
-                    })
+                    
+                    const sellerSol = getStockBalance(fill.userId, "sol");
+                    stockBalances.get(fill.userId)!.set("sol", {
+                        available: sellerSol.available - fill.qty,
+                        locked: sellerSol.locked + fill.qty
+                    });
                 }
             })
         }
