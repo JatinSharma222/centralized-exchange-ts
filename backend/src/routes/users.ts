@@ -1,6 +1,14 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { eq } from "drizzle-orm";
+import { createClient } from "redis";
+
+const QUEUE_NAME = "queue-" + Math.random().toString().substring(0, 5);
+
+const client = createClient();
+client.connect();
+
+const receiveClient = createClient();
 
 import {
     authMiddleware,
@@ -24,31 +32,21 @@ import { users } from "../db/schema";
 
 export const router = Router();
 
-const usdBalances: Map<
-    number,
-    { available: number; locked: number }
-> = new Map();
 
-const stockBalances: Map<
-    number,
-    Map<string, { available: number; locked: number }>
-> = new Map();
+// const SOL_ORDERBOOK = new Ordebook("sol");
 
-const SOL_ORDERBOOK = new Ordebook("sol");
-
-function getStockBalance(userId: number, asset: string) {
-    return stockBalances.get(userId)!.get(asset) ?? {
-        available: 0,
-        locked: 0
-    };
-}
+// function getStockBalance(userId: number, asset: string) {
+//     return stockBalances.get(userId)!.get(asset) ?? {
+//         available: 0,
+//         locked: 0
+//     };
+// }
 
 
 
 router.post("/signup", async (req, res) => {
     const body = req.body as SignupInput;
 
-    // Check if username already exists
     const existingUser = await db
         .select()
         .from(users)
@@ -63,7 +61,6 @@ router.post("/signup", async (req, res) => {
         return;
     }
 
-    // Insert user into PostgreSQL
     const [user] = await db
         .insert(users)
         .values({
@@ -80,14 +77,6 @@ router.post("/signup", async (req, res) => {
         return;
     }
 
-    // Initialize balances in memory for now
-    usdBalances.set(user.id, {
-        available: 0,
-        locked: 0
-    });
-
-    stockBalances.set(user.id, new Map());
-
     res.status(201).json({
         message: "Successfully signed up"
     } satisfies SignupResponse);
@@ -98,7 +87,6 @@ router.post("/signup", async (req, res) => {
 router.post("/signin", async (req, res) => {
     const body = req.body as SigninInput;
 
-    // Find user by username
     const [user] = await db
         .select()
         .from(users)
@@ -131,4 +119,21 @@ router.post("/signin", async (req, res) => {
     res.json({
         token
     });
+});
+
+router.post("/onramp", authMiddleware, async (req: AuthRequest, res) => {
+    const body = req.body as OnRampRequest;
+
+    await client.lPush("engine-queue", JSON.stringify({
+        type: "onramp",
+        payload: {
+            userId: req.userId!,
+            amount: body.qty
+        }
+    }))
+
+    res.json({
+        message: "Onramp request received"
+    });
+
 });
