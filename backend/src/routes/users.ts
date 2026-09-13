@@ -1,74 +1,128 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
+import { eq } from "drizzle-orm";
 
-import { authMiddleware, JWT_SECRET, type AuthRequest } from "../middleware";
+import {
+    authMiddleware,
+    JWT_SECRET,
+    type AuthRequest
+} from "../middleware";
+
 import type {
     Claims,
     DepositRequest,
-    DespositResponse,
     OnRampRequest,
     OrderRequest,
     SigninInput,
     SignupInput,
     SignupResponse,
-    User
 } from "../types/user";
-// import { AuthorityType } from "@solana/spl-token";
+
 import { Ordebook } from "../orderbook";
+import { db } from "../db";
+import { users } from "../db/schema";
 
 export const router = Router();
 
-let userIndex = 0;
-const users: User[] = [];
+const usdBalances: Map<
+    number,
+    { available: number; locked: number }
+> = new Map();
 
-const usdBalances: Map<number, { available: number, locked: number }> = new Map();
-const stockBalances: Map<number, Map<String, { available: number, locked: number }>> = new Map();
+const stockBalances: Map<
+    number,
+    Map<string, { available: number; locked: number }>
+> = new Map();
 
 const SOL_ORDERBOOK = new Ordebook("sol");
 
 function getStockBalance(userId: number, asset: string) {
-    return stockBalances.get(userId)!.get(asset) ?? { available: 0, locked: 0 };
+    return stockBalances.get(userId)!.get(asset) ?? {
+        available: 0,
+        locked: 0
+    };
 }
 
-router.post("/signup", (req, res) => {
+
+
+router.post("/signup", async (req, res) => {
     const body = req.body as SignupInput;
 
-    const userFound = users.find(u => u.username === body.username);
+    // Check if username already exists
+    const existingUser = await db
+        .select()
+        .from(users)
+        .where(eq(users.username, body.username))
+        .limit(1);
 
-    if (!userFound) {
-        userIndex = userIndex + 1;
-        users.push({
-            id: userIndex,
+    if (existingUser.length > 0) {
+        res.status(409).json({
+            message: "User already exists"
+        } satisfies SignupResponse);
+
+        return;
+    }
+
+    // Insert user into PostgreSQL
+    const [user] = await db
+        .insert(users)
+        .values({
             username: body.username,
             password: body.password
-        });
+        })
+        .returning();
 
-        usdBalances.set(userIndex, {available: 0, locked: 0});
-        stockBalances.set(userIndex, new Map());
+    if (!user) {
+        res.status(500).json({
+            message: "Failed to create user"
+        } satisfies SignupResponse);
 
-        res.json({
-            message: "Successfully signed up"
-        } satisfies SignupResponse);
-    } else {
-        res.status(401).json({
-            message: "User already"
-        } satisfies SignupResponse);
+        return;
     }
+
+    // Initialize balances in memory for now
+    usdBalances.set(user.id, {
+        available: 0,
+        locked: 0
+    });
+
+    stockBalances.set(user.id, new Map());
+
+    res.status(201).json({
+        message: "Successfully signed up"
+    } satisfies SignupResponse);
 });
 
-router.post("/signin", (req, res) => {
-    const body = req.body as SigninInput;
-    const userFound = users.find(u => u.username === body.username && u.password === body.password);
 
-    if (!userFound) {
+
+router.post("/signin", async (req, res) => {
+    const body = req.body as SigninInput;
+
+    // Find user by username
+    const [user] = await db
+        .select()
+        .from(users)
+        .where(eq(users.username, body.username))
+        .limit(1);
+
+    if (!user) {
         res.status(401).json({
             message: "Incorrect credentials"
         } satisfies SignupResponse);
+
+        return;
+    }
+
+    if (user.password !== body.password) {
+        res.status(401).json({
+            message: "Incorrect credentials"
+        } satisfies SignupResponse);
+
         return;
     }
 
     const claims: Claims = {
-        sub: userFound.id,
+        sub: user.id,
         exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60
     };
 
@@ -78,145 +132,3 @@ router.post("/signin", (req, res) => {
         token
     });
 });
-
-router.get("/balance", authMiddleware, (req: AuthRequest, res) => {
-    const userId = req.userId!;
-    const balances = stockBalances.get(userId) ?? new Map();
-    let stock_balances = Object.fromEntries(balances);
-
-    res.json({
-        usdBalance: usdBalances.get(userId)?.available,
-        stockBalances: stock_balances
-    });
-});
-
-router.post("/onramp", authMiddleware, (req: AuthRequest, res) => {
-    const userId = req.userId!;
-    const body = req.body as OnRampRequest;
-    usdBalances.set(userId, {
-        locked: usdBalances.get(userId)?.locked!,
-        available: usdBalances.get(userId)?.available! + body.qty
-    });
-    res.sendStatus(200);
-});
-
-router.post("/deposit/:asset_symbol", authMiddleware, (req: AuthRequest, res) => {
-    const userId = req.userId!;
-    const symbol = req.params.asset_symbol as string;
-    const body = req.body as DepositRequest;
-
-    const balances = stockBalances.get(userId)!;
-    const existingBalance = balances.get(symbol);
-    balances.set(symbol, {locked: existingBalance?.locked || 0, available: (existingBalance?.available || 0) + body.qty});
-
-    res.json({
-        message: "Successfully deposited"
-    });
-});
-
-router.post("/order", authMiddleware, (req: AuthRequest, res) => {
-    const userId = req.userId!;
-    const body = req.body as OrderRequest;
-
-    if (body.side == "bid") {
-        const amountToSpend = body.price * body.qty;
-        const userBalance = usdBalances.get(userId)?.available || 0;
-
-        if (userBalance < amountToSpend) {
-            res.status(411).json({
-                message: "You have insufficient funds"
-            })
-            return 
-        }
-
-        if (body.asset === "sol") {
-            let fills = SOL_ORDERBOOK.addOrder(userId, "bid", body.price, body.qty);
-            fills.forEach(fill => {
-                if (fill.type == "fill") {
-                    
-                    const buyerSol = getStockBalance(fill.buyer, "sol");
-                    stockBalances.get(fill.buyer)!.set("sol", {
-                        available: buyerSol.available + fill.qty,
-                        locked: buyerSol.locked
-                    });
-
-                    const sellerSol = getStockBalance(fill.seller, "sol");
-                    stockBalances.get(fill.seller)!.set("sol", {
-                        available: sellerSol.available,
-                        locked: sellerSol.locked - fill.qty
-                    });
-
-                    usdBalances.set(userId, {
-                        available: usdBalances.get(userId)!.available - fill.price * fill.qty,
-                        locked: usdBalances.get(userId)!.locked
-                    });
-
-                    usdBalances.set(fill.seller, {
-                        available: usdBalances.get(fill.seller)!.available + fill.price * fill.qty,
-                        locked: usdBalances.get(fill.seller)!.locked
-                    });
-                }
-
-                if (fill.type == "orderbook_update") {
-                    usdBalances.set(userId, {
-                        available: usdBalances.get(userId)!.available - fill.price * fill.qty,
-                        locked: usdBalances.get(userId)!.locked + fill.price * fill.qty
-                    });
-                }
-            })
-        }
-    } 
-
-    if (body.side == "ask") {
-        const existingAmount = stockBalances.get(userId)?.get(body.asset)?.available || 0;
-        if (body.qty > existingAmount) {
-            res.status(411).json({
-                message: "You have insufficient stocks"
-            })
-            return
-        }
-
-        if (body.asset === "sol") {
-            let fills = SOL_ORDERBOOK.addOrder(userId, "ask", body.price, body.qty);
-
-            fills.forEach(fill => {
-                if (fill.type == "fill") {
-
-                    const buyerSol = getStockBalance(fill.buyer, "sol");
-                    stockBalances.get(fill.buyer)!.set("sol", {
-                        available: buyerSol.available + fill.qty,
-                        locked: buyerSol.locked
-                    });
-
-                    const sellerSol = getStockBalance(fill.seller, "sol");
-                    stockBalances.get(fill.seller)!.set("sol", {
-                        available: sellerSol.available,
-                        locked: sellerSol.locked - fill.qty
-                    });
-
-                    usdBalances.set(userId, {
-                        available: usdBalances.get(userId)!.available + fill.price * fill.qty,
-                        locked: usdBalances.get(userId)!.locked
-                    });
-
-                    usdBalances.set(fill.buyer, {
-                    available: usdBalances.get(fill.buyer)!.available,
-                    locked: usdBalances.get(fill.buyer)!.locked - fill.price * fill.qty
-                });
-                }
-
-                if (fill.type == "orderbook_update") {
-                    
-                    const sellerSol = getStockBalance(fill.userId, "sol");
-                    stockBalances.get(fill.userId)!.set("sol", {
-                        available: sellerSol.available - fill.qty,
-                        locked: sellerSol.locked + fill.qty
-                    });
-                }
-            })
-        }
-    }
-  res.status(200).json({
-    message: "Successfully placed order"
-  })  
-})
