@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 
 import type { Claims } from "../types/user";
 
-export const JWT_SECRET = "secret";
+export const JWT_SECRET = process.env.JWT_SECRET || "default_secret";
 
 export interface AuthRequest extends Request {
     userId?: number;

@@ -33,7 +33,7 @@ export interface OnRampRequest {
 
 export interface DepositRequest {
     qty: number;
-    ticker: string;
+    asset: string;
 }
 
 export interface OrderRequest {
@@ -42,6 +42,11 @@ export interface OrderRequest {
     qty: number,
     price: number,
     asset: "sol" | "eth"
+}
+
+export interface CancelOrderRequest {
+    orderId: number;
+    asset: "sol" | "eth";
 }
 
 export interface OnRampResponse {

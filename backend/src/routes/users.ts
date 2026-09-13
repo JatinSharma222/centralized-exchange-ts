@@ -1,5 +1,6 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import { createClient } from "redis";
 
@@ -9,6 +10,7 @@ import { users } from "../db/schema";
 import { authMiddleware, JWT_SECRET, type AuthRequest } from "../middleware";
 
 import type {
+    CancelOrderRequest,
   Claims,
   DepositRequest,
   OnRampRequest,
@@ -45,11 +47,13 @@ router.post("/signup", async (req, res) => {
     return;
   }
 
+  const hashedPassword = await bcrypt.hash(body.password, 10);
+
   const [user] = await db
     .insert(users)
     .values({
       username: body.username,
-      password: body.password,
+      password: hashedPassword,
     })
     .returning();
 
@@ -83,7 +87,9 @@ router.post("/signin", async (req, res) => {
     return;
   }
 
-  if (user.password !== body.password) {
+  const isMatch = await bcrypt.compare(body.password, user.password);
+
+  if (!isMatch) {
     res.status(401).json({
       message: "Incorrect credentials",
     } satisfies SignupResponse);
@@ -131,7 +137,7 @@ router.post("/deposit", authMiddleware, async (req: AuthRequest, res) => {
       type: "Deposit",
       payload: {
         userId: req.userId!,
-        ticker: body.ticker,
+        asset: body.asset,
         qty: body.qty,
       },
     }),
@@ -139,6 +145,45 @@ router.post("/deposit", authMiddleware, async (req: AuthRequest, res) => {
 
   res.json({
     message: "Deposit request received",
+  });
+});
+
+router.post("/order", authMiddleware, async (req: AuthRequest, res) => {
+  const body = req.body as OrderRequest;
+
+  await client.lPush(
+    "engine-queue",
+    JSON.stringify({
+      type: "createOrder",
+      payload: {
+        userId: req.userId!,
+        order: body,
+      },
+    }),
+  );
+
+  res.json({
+    message: "Order request received",
+  });
+});
+
+router.post("/cancel_order", authMiddleware, async (req: AuthRequest, res) => {
+  const body = req.body as CancelOrderRequest;
+
+  await client.lPush(
+    "engine-queue",
+    JSON.stringify({
+      type: "cancelOrder",
+      payload: {
+        userId: req.userId!,
+        orderId: body.orderId,
+        asset: body.asset,
+      },
+    }),
+  );
+
+  res.json({
+    message: "Cancel order request received",
   });
 });
 
