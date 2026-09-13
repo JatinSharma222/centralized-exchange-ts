@@ -33,6 +33,7 @@ export interface OnRampRequest {
 
 export interface DepositRequest {
     qty: number;
+    ticker: string;
 }
 
 export interface OrderRequest {

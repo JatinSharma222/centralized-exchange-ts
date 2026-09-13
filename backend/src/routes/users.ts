@@ -26,7 +26,6 @@ import type {
     SignupResponse,
 } from "../types/user";
 
-import { Ordebook } from "../orderbook";
 import { db } from "../db";
 import { users } from "../db/schema";
 
@@ -134,6 +133,24 @@ router.post("/onramp", authMiddleware, async (req: AuthRequest, res) => {
 
     res.json({
         message: "Onramp request received"
+    });
+
+});
+
+router.post("/deposit", authMiddleware, async (req: AuthRequest, res) => {
+    const body = req.body as DepositRequest;
+
+    await client.lPush("engine-queue", JSON.stringify({
+        type: "Deposit",
+        payload: {
+            userId: req.userId!,
+            ticker: body.ticker,
+            qty: body.qty
+        }
+    }))
+
+    res.json({
+        message: "Deposit request received"
     });
 
 });

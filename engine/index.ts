@@ -36,5 +36,25 @@ client.connect()
 
                 usdBalances.get(userId)!.available += parsedData.payload.amount;
             }
+
+            if(parsedData.type == "Deposit"){
+                const userId = parsedData.payload.userId;
+                const ticker = parsedData.payload.ticker;
+                const qty = parsedData.payload.qty;
+
+                if(!stockBalances.get(userId)) {
+                    stockBalances.set(userId, new Map());
+                }
+                
+                if(!stockBalances.get(userId)!.get(ticker)) {
+                    stockBalances.get(userId)!.set(ticker, {
+                        available: 0,
+                        locked: 0
+                    });
+                }
+
+                stockBalances.get(userId)!.get(ticker)!.available += qty;
+            }
+
         }
     })
