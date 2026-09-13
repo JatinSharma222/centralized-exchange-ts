@@ -10,7 +10,7 @@ import { users } from "../db/schema";
 import { authMiddleware, JWT_SECRET, type AuthRequest } from "../middleware";
 
 import type {
-    CancelOrderRequest,
+  CancelOrderRequest,
   Claims,
   DepositRequest,
   OnRampRequest,
@@ -25,8 +25,22 @@ client.connect();
 
 const receiveClient = createClient();
 
-const QUEUE_NAME = "queue-" + Math.random().toString().substring(0, 5);
-const CALLBACKS: Record<string, (balance: unknown) => void> = {};
+const QUEUE_NAME = "queue-" + crypto.randomUUID();
+const CALLBACKS: Record<string, (data: unknown) => void> = {};
+
+function waitForCallback<T>(callbackId: string, timeoutMs = 5000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      delete CALLBACKS[callbackId];
+      reject(new Error("Engine did not respond in time"));
+    }, timeoutMs);
+
+    CALLBACKS[callbackId] = (data) => {
+      clearTimeout(timer);
+      resolve(data as T);
+    };
+  });
+}
 
 export const router = Router();
 
@@ -150,6 +164,7 @@ router.post("/deposit", authMiddleware, async (req: AuthRequest, res) => {
 
 router.post("/order", authMiddleware, async (req: AuthRequest, res) => {
   const body = req.body as OrderRequest;
+  const callbackId = crypto.randomUUID();
 
   await client.lPush(
     "engine-queue",
@@ -159,16 +174,26 @@ router.post("/order", authMiddleware, async (req: AuthRequest, res) => {
         userId: req.userId!,
         order: body,
       },
+      queue: QUEUE_NAME,
+      callbackId,
     }),
   );
 
-  res.json({
-    message: "Order request received",
-  });
+  try {
+    const result = await waitForCallback<{ orderId: number; updates: unknown[] }>(callbackId);
+    res.json({
+      message: "Order placed",
+      orderId: result.orderId,
+      updates: result.updates,
+    });
+  } catch {
+    res.status(504).json({ message: "Order processing timed out" });
+  }
 });
 
 router.post("/cancel_order", authMiddleware, async (req: AuthRequest, res) => {
   const body = req.body as CancelOrderRequest;
+  const callbackId = crypto.randomUUID();
 
   await client.lPush(
     "engine-queue",
@@ -179,16 +204,26 @@ router.post("/cancel_order", authMiddleware, async (req: AuthRequest, res) => {
         orderId: body.orderId,
         asset: body.asset,
       },
+      queue: QUEUE_NAME,
+      callbackId,
     }),
   );
 
-  res.json({
-    message: "Cancel order request received",
-  });
+  try {
+    const result = await waitForCallback<{ canceled: boolean }>(callbackId);
+    if (result.canceled) {
+      res.json({ message: "Order canceled", canceled: true });
+    } else {
+      res.status(404).json({ message: "Order not found or not owned by you", canceled: false });
+    }
+  } catch {
+    res.status(504).json({ message: "Cancel request timed out" });
+  }
 });
 
 router.get("/balance", authMiddleware, async (req: AuthRequest, res) => {
-  const callbackId = Math.random().toString().substring(0, 5);
+  const callbackId = crypto.randomUUID();
+
   await client.lPush(
     "engine-queue",
     JSON.stringify({
@@ -201,26 +236,25 @@ router.get("/balance", authMiddleware, async (req: AuthRequest, res) => {
     }),
   );
 
-  const balance = await new Promise((resolve) => {
-    CALLBACKS[callbackId] = resolve;
-  });
-
-  res.json(balance);
+  try {
+    const result = await waitForCallback<{ balance: unknown }>(callbackId);
+    res.json(result.balance);
+  } catch {
+    res.status(504).json({ message: "Balance lookup timed out" });
+  }
 });
 
 receiveClient.connect().then(async () => {
   while (1) {
-    const res = await receiveClient.blPop(QUEUE_NAME, 1000);
-    console.log("reading from queue");
+    const res = await receiveClient.blPop(QUEUE_NAME, 1);
     if (!res) {
       continue;
     }
     const parsedData = JSON.parse(res.element);
     const callbackId = parsedData.callbackId;
-    const balance = parsedData.balance;
     const callback = CALLBACKS[callbackId];
     if (callback) {
-      callback(balance);
+      callback(parsedData);
       delete CALLBACKS[callbackId];
     }
   }
