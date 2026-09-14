@@ -1,26 +1,13 @@
-// Bun provides this module at runtime, but TypeScript may not have Bun's type declarations installed.
 // @ts-expect-error bun:test is resolved by the Bun test runner.
-import { test, expect, describe, beforeAll } from "bun:test";
+import { test, expect, describe } from "bun:test";
 import axios, { AxiosError } from "axios";
 
 const BACKEND_URL = "http://localhost:3000";
 
-// ---------------------------------------------------------------------------
-// Helper: create a fresh user and return { username, password, token }
-// ---------------------------------------------------------------------------
-async function createUserAndSignin(
-    username?: string,
-    password = "testpassword123"
-) {
+async function createUserAndSignin(username?: string, password = "testpassword123") {
     const uname = username ?? "user_" + Math.random().toString(36).slice(2);
-    await axios.post(`${BACKEND_URL}/signup`, {
-        username: uname,
-        password,
-    });
-    const signinRes = await axios.post(`${BACKEND_URL}/signin`, {
-        username: uname,
-        password,
-    });
+    await axios.post(`${BACKEND_URL}/signup`, { username: uname, password });
+    const signinRes = await axios.post(`${BACKEND_URL}/signin`, { username: uname, password });
     return { username: uname, password, token: signinRes.data.token as string };
 }
 
@@ -28,564 +15,498 @@ function authHeader(token: string) {
     return { headers: { Authorization: `Bearer ${token}` } };
 }
 
-// ===========================================================================
-//  POST /signup
-// ===========================================================================
+async function deposit(token: string, asset: string, qty: number) {
+    return axios.post(`${BACKEND_URL}/deposit`, { asset, qty }, authHeader(token));
+}
+
+async function onramp(token: string, qty: number) {
+    return axios.post(`${BACKEND_URL}/onramp`, { qty }, authHeader(token));
+}
+
+async function getBalance(token: string) {
+    return axios.get(`${BACKEND_URL}/balance`, authHeader(token));
+}
+
+type BalanceResponse = {
+    data: {
+        usd: { available: number; locked: number };
+        assets: Record<string, { available: number; locked: number }>;
+    };
+};
+
+async function placeOrder(
+    token: string,
+    order: { side: "bid" | "ask"; qty: number; price: number; asset: string }
+) {
+    return axios.post(
+        `${BACKEND_URL}/order`,
+        { type: "limit", ...order },
+        authHeader(token)
+    );
+}
+
+function expectStatus(err: unknown, status: number) {
+    const error = err as AxiosError;
+    expect(error.response?.status).toBe(status);
+}
+
 describe("POST /signup", () => {
-    test("should sign up a new user successfully", async () => {
-        const username = "signup_test_" + Math.random();
+    test("creates a new user", async () => {
         const res = await axios.post(`${BACKEND_URL}/signup`, {
-            username,
+            username: "signup_" + Math.random(),
             password: "123123",
         });
 
-        expect(res.status).toBe(200);
+        expect(res.status).toBe(201);
         expect(res.data.message).toBe("Successfully signed up");
     });
 
-    test("should reject duplicate username with 401", async () => {
-        const username = "dup_user_" + Math.random();
-        await axios.post(`${BACKEND_URL}/signup`, {
-            username,
-            password: "pass1",
-        });
+    test("rejects a duplicate username", async () => {
+        const username = "dup_" + Math.random();
+        await axios.post(`${BACKEND_URL}/signup`, { username, password: "pass1" });
 
         try {
-            await axios.post(`${BACKEND_URL}/signup`, {
-                username,
-                password: "pass2",
-            });
-            // If we reach here the test should fail
-            expect(true).toBe(false);
+            await axios.post(`${BACKEND_URL}/signup`, { username, password: "pass2" });
+            throw new Error("expected request to fail");
         } catch (err) {
-            const error = err as AxiosError<{ message: string }>;
-            expect(error.response?.status).toBe(401);
-            expect(error.response?.data?.message).toBe("User already");
+            expectStatus(err, 409);
         }
     });
 
-    test("multiple different users can sign up independently", async () => {
-        const res1 = await axios.post(`${BACKEND_URL}/signup`, {
-            username: "multi_a_" + Math.random(),
-            password: "abc",
-        });
-        const res2 = await axios.post(`${BACKEND_URL}/signup`, {
-            username: "multi_b_" + Math.random(),
-            password: "abc",
-        });
-        expect(res1.status).toBe(200);
-        expect(res2.status).toBe(200);
+    test("allows independent users to sign up concurrently", async () => {
+        const [res1, res2] = await Promise.all([
+            axios.post(`${BACKEND_URL}/signup`, { username: "a_" + Math.random(), password: "abc" }),
+            axios.post(`${BACKEND_URL}/signup`, { username: "b_" + Math.random(), password: "abc" }),
+        ]);
+
+        expect(res1.status).toBe(201);
+        expect(res2.status).toBe(201);
     });
 });
 
-// ===========================================================================
-//  POST /signin
-// ===========================================================================
 describe("POST /signin", () => {
-    test("should return a JWT token on valid credentials", async () => {
-        const username = "signin_ok_" + Math.random();
-        await axios.post(`${BACKEND_URL}/signup`, {
-            username,
-            password: "mypass",
-        });
+    test("returns a token for valid credentials", async () => {
+        const username = "signin_" + Math.random();
+        await axios.post(`${BACKEND_URL}/signup`, { username, password: "mypass" });
 
-        const res = await axios.post(`${BACKEND_URL}/signin`, {
-            username,
-            password: "mypass",
-        });
+        const res = await axios.post(`${BACKEND_URL}/signin`, { username, password: "mypass" });
 
         expect(res.status).toBe(200);
         expect(typeof res.data.token).toBe("string");
         expect(res.data.token.length).toBeGreaterThan(0);
     });
 
-    test("should reject wrong password with 401", async () => {
-        const username = "signin_bad_pass_" + Math.random();
-        await axios.post(`${BACKEND_URL}/signup`, {
-            username,
-            password: "correct",
-        });
+    test("rejects an incorrect password", async () => {
+        const username = "badpass_" + Math.random();
+        await axios.post(`${BACKEND_URL}/signup`, { username, password: "correct" });
 
         try {
-            await axios.post(`${BACKEND_URL}/signin`, {
-                username,
-                password: "wrong",
-            });
-            expect(true).toBe(false);
+            await axios.post(`${BACKEND_URL}/signin`, { username, password: "wrong" });
+            throw new Error("expected request to fail");
         } catch (err) {
-            const error = err as AxiosError<{ message: string }>;
-            expect(error.response?.status).toBe(401);
-            expect(error.response?.data?.message).toBe("Incorrect credentials");
+            expectStatus(err, 401);
         }
     });
 
-    test("should reject non-existent user with 401", async () => {
+    test("rejects a non-existent user", async () => {
         try {
             await axios.post(`${BACKEND_URL}/signin`, {
-                username: "does_not_exist_" + Math.random(),
+                username: "missing_" + Math.random(),
                 password: "anything",
             });
-            expect(true).toBe(false);
+            throw new Error("expected request to fail");
         } catch (err) {
-            const error = err as AxiosError<{ message: string }>;
-            expect(error.response?.status).toBe(401);
-            expect(error.response?.data?.message).toBe("Incorrect credentials");
+            expectStatus(err, 401);
         }
     });
 });
 
-// ===========================================================================
-//  Auth Middleware
-// ===========================================================================
-describe("Auth Middleware", () => {
-    test("should reject requests without Authorization header", async () => {
+describe("auth middleware", () => {
+    test("rejects requests with no Authorization header", async () => {
         try {
             await axios.get(`${BACKEND_URL}/balance`);
-            expect(true).toBe(false);
+            throw new Error("expected request to fail");
         } catch (err) {
-            const error = err as AxiosError<{ message: string }>;
-            expect(error.response?.status).toBe(400);
-            expect(error.response?.data?.message).toBe(
-                "Invalid or missing token"
-            );
+            expectStatus(err, 400);
         }
     });
 
-    test("should reject requests with an invalid token", async () => {
+    test("rejects an invalid token", async () => {
         try {
             await axios.get(`${BACKEND_URL}/balance`, {
-                headers: { Authorization: "Bearer invalidtokenxyz" },
+                headers: { Authorization: "Bearer invalidtoken" },
             });
-            expect(true).toBe(false);
+            throw new Error("expected request to fail");
         } catch (err) {
-            const error = err as AxiosError<{ message: string }>;
-            expect(error.response?.status).toBe(400);
-            expect(error.response?.data?.message).toBe(
-                "Invalid or missing token"
-            );
+            expectStatus(err, 400);
         }
     });
 
-    test("should reject requests with empty Bearer token", async () => {
+    test("rejects a token signed with a different secret", async () => {
+        const forged =
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." +
+            "eyJzdWIiOjEsImV4cCI6OTk5OTk5OTk5OX0." +
+            "invalidsignature";
+
+        try {
+            await axios.get(`${BACKEND_URL}/balance`, authHeader(forged));
+            throw new Error("expected request to fail");
+        } catch (err) {
+            expectStatus(err, 400);
+        }
+    });
+
+    test("rejects a malformed Authorization header", async () => {
+        const { token } = await createUserAndSignin();
+
         try {
             await axios.get(`${BACKEND_URL}/balance`, {
-                headers: { Authorization: "Bearer " },
+                headers: { Authorization: token },
             });
-            expect(true).toBe(false);
+            throw new Error("expected request to fail");
         } catch (err) {
-            const error = err as AxiosError<{ message: string }>;
-            expect(error.response?.status).toBe(400);
+            expectStatus(err, 400);
         }
     });
 });
 
-// ===========================================================================
-//  GET /balance
-// ===========================================================================
 describe("GET /balance", () => {
-    test("new user should have 0 usdBalance and empty stockBalances", async () => {
+    test("a new user has zero balance and no assets", async () => {
         const { token } = await createUserAndSignin();
-
-        const res = await axios.get(`${BACKEND_URL}/balance`, authHeader(token));
+        const res = await getBalance(token);
 
         expect(res.status).toBe(200);
-        expect(res.data.usdBalance).toBe(0);
-        expect(res.data.stockBalances).toBeDefined();
-        expect(Object.keys(res.data.stockBalances).length).toBe(0);
+        expect(res.data.usd.available).toBe(0);
+        expect(Object.keys(res.data.assets).length).toBe(0);
     });
 
-    test("balance should reflect onramp deposits", async () => {
+    test("reflects onramp deposits", async () => {
         const { token } = await createUserAndSignin();
+        await onramp(token, 250);
 
-        await axios.post(`${BACKEND_URL}/onramp`, { qty: 250 }, authHeader(token));
-
-        const res = await axios.get(`${BACKEND_URL}/balance`, authHeader(token));
-
-        expect(res.data.usdBalance).toBe(250);
+        const res = await getBalance(token);
+        expect(res.data.usd.available).toBe(250);
     });
 
-    test("balance should reflect stock deposits", async () => {
+    test("reflects asset deposits", async () => {
         const { token } = await createUserAndSignin();
+        await deposit(token, "sol", 10);
 
-        await axios.post(
-            `${BACKEND_URL}/deposit/sol`,
-            { qty: 10 },
-            authHeader(token)
-        );
-
-        const res = await axios.get(`${BACKEND_URL}/balance`, authHeader(token));
-
-        expect(res.data.stockBalances["sol"]).toBeDefined();
-        expect(res.data.stockBalances["sol"].available).toBe(10);
-        expect(res.data.stockBalances["sol"].locked).toBe(0);
+        const res = await getBalance(token);
+        expect(res.data.assets.sol.available).toBe(10);
+        expect(res.data.assets.sol.locked).toBe(0);
     });
 
-    test("each user should see their own balance only", async () => {
+    test("each user only sees their own balance", async () => {
         const user1 = await createUserAndSignin();
         const user2 = await createUserAndSignin();
 
-        await axios.post(`${BACKEND_URL}/onramp`, { qty: 500 }, authHeader(user1.token));
-        await axios.post(`${BACKEND_URL}/onramp`, { qty: 100 }, authHeader(user2.token));
+        await onramp(user1.token, 500);
+        await onramp(user2.token, 100);
 
-        const bal1 = await axios.get(`${BACKEND_URL}/balance`, authHeader(user1.token));
-        const bal2 = await axios.get(`${BACKEND_URL}/balance`, authHeader(user2.token));
+        const bal1 = await getBalance(user1.token);
+        const bal2 = await getBalance(user2.token);
 
-        expect(bal1.data.usdBalance).toBe(500);
-        expect(bal2.data.usdBalance).toBe(100);
+        expect(bal1.data.usd.available).toBe(500);
+        expect(bal2.data.usd.available).toBe(100);
     });
 });
 
-// ===========================================================================
-//  POST /onramp
-// ===========================================================================
 describe("POST /onramp", () => {
-    test("should add USD to user balance", async () => {
+    test("adds USD to the user's balance", async () => {
         const { token } = await createUserAndSignin();
-
-        const res = await axios.post(
-            `${BACKEND_URL}/onramp`,
-            { qty: 100 },
-            authHeader(token)
-        );
+        const res = await onramp(token, 100);
 
         expect(res.status).toBe(200);
-
-        const balRes = await axios.get(`${BACKEND_URL}/balance`, authHeader(token));
-        expect(balRes.data.usdBalance).toBe(100);
+        const bal = await getBalance(token);
+        expect(bal.data.usd.available).toBe(100);
     });
 
-    test("multiple onramps should accumulate", async () => {
+    test("accumulates across multiple calls", async () => {
         const { token } = await createUserAndSignin();
+        await onramp(token, 50);
+        await onramp(token, 75);
+        await onramp(token, 25);
 
-        await axios.post(`${BACKEND_URL}/onramp`, { qty: 50 }, authHeader(token));
-        await axios.post(`${BACKEND_URL}/onramp`, { qty: 75 }, authHeader(token));
-        await axios.post(`${BACKEND_URL}/onramp`, { qty: 25 }, authHeader(token));
-
-        const balRes = await axios.get(`${BACKEND_URL}/balance`, authHeader(token));
-        expect(balRes.data.usdBalance).toBe(150);
+        const bal = await getBalance(token);
+        expect(bal.data.usd.available).toBe(150);
     });
 
-    test("should reject unauthenticated onramp", async () => {
+    test("rejects unauthenticated requests", async () => {
         try {
             await axios.post(`${BACKEND_URL}/onramp`, { qty: 100 });
-            expect(true).toBe(false);
+            throw new Error("expected request to fail");
         } catch (err) {
-            const error = err as AxiosError;
-            expect(error.response?.status).toBe(400);
+            expectStatus(err, 400);
         }
     });
 });
 
-// ===========================================================================
-//  POST /deposit/:asset_symbol
-// ===========================================================================
-describe("POST /deposit/:asset_symbol", () => {
-    test("should deposit a stock asset", async () => {
+describe("POST /deposit", () => {
+    test("deposits an asset", async () => {
         const { token } = await createUserAndSignin();
-
-        const res = await axios.post(
-            `${BACKEND_URL}/deposit/sol`,
-            { qty: 5 },
-            authHeader(token)
-        );
+        const res = await deposit(token, "sol", 5);
 
         expect(res.status).toBe(200);
-        expect(res.data.message).toBe("Successfully deposited");
-
-        const balRes = await axios.get(`${BACKEND_URL}/balance`, authHeader(token));
-        expect(balRes.data.stockBalances["sol"].available).toBe(5);
-        expect(balRes.data.stockBalances["sol"].locked).toBe(0);
+        const bal = await getBalance(token);
+        expect(bal.data.assets.sol.available).toBe(5);
+        expect(bal.data.assets.sol.locked).toBe(0);
     });
 
-    test("multiple deposits to the same asset should accumulate", async () => {
+    test("accumulates deposits of the same asset", async () => {
         const { token } = await createUserAndSignin();
+        await deposit(token, "sol", 3);
+        await deposit(token, "sol", 7);
 
-        await axios.post(`${BACKEND_URL}/deposit/sol`, { qty: 3 }, authHeader(token));
-        await axios.post(`${BACKEND_URL}/deposit/sol`, { qty: 7 }, authHeader(token));
-
-        const balRes = await axios.get(`${BACKEND_URL}/balance`, authHeader(token));
-        expect(balRes.data.stockBalances["sol"].available).toBe(10);
+        const bal = await getBalance(token);
+        expect(bal.data.assets.sol.available).toBe(10);
     });
 
-    test("deposits to different assets should be tracked separately", async () => {
+    test("tracks different assets separately", async () => {
         const { token } = await createUserAndSignin();
+        await deposit(token, "sol", 4);
+        await deposit(token, "eth", 6);
 
-        await axios.post(`${BACKEND_URL}/deposit/sol`, { qty: 4 }, authHeader(token));
-        await axios.post(`${BACKEND_URL}/deposit/eth`, { qty: 6 }, authHeader(token));
-
-        const balRes = await axios.get(`${BACKEND_URL}/balance`, authHeader(token));
-        expect(balRes.data.stockBalances["sol"].available).toBe(4);
-        expect(balRes.data.stockBalances["eth"].available).toBe(6);
+        const bal = await getBalance(token);
+        expect(bal.data.assets.sol.available).toBe(4);
+        expect(bal.data.assets.eth.available).toBe(6);
     });
 
-    test("should reject unauthenticated deposit", async () => {
+    test("rejects unauthenticated requests", async () => {
         try {
-            await axios.post(`${BACKEND_URL}/deposit/sol`, { qty: 1 });
-            expect(true).toBe(false);
+            await axios.post(`${BACKEND_URL}/deposit`, { asset: "sol", qty: 1 });
+            throw new Error("expected request to fail");
         } catch (err) {
-            const error = err as AxiosError;
-            expect(error.response?.status).toBe(400);
+            expectStatus(err, 400);
         }
     });
 });
 
-// ===========================================================================
-//  POST /order
-// ===========================================================================
 describe("POST /order", () => {
-    // ----- BID ORDERS -----
     describe("bid orders", () => {
-        test("bid with insufficient USD should return 411", async () => {
+        test("rejects a bid with insufficient USD", async () => {
             const { token } = await createUserAndSignin();
-            // User has 0 USD, tries to place a bid
 
             try {
-                await axios.post(
-                    `${BACKEND_URL}/order`,
-                    { type: "limit", side: "bid", qty: 1, price: 100, asset: "sol" },
-                    authHeader(token)
-                );
-                expect(true).toBe(false);
+                await placeOrder(token, { side: "bid", qty: 1, price: 100, asset: "sol" });
+                throw new Error("expected request to fail");
             } catch (err) {
-                const error = err as AxiosError<{ message: string }>;
-                expect(error.response?.status).toBe(411);
-                expect(error.response?.data?.message).toBe(
-                    "You have insufficient funds"
-                );
+                expectStatus(err, 400);
             }
         });
 
-        test("bid with exact sufficient USD should succeed (order goes to orderbook)", async () => {
+        test("accepts a bid backed by exactly enough USD", async () => {
             const { token } = await createUserAndSignin();
-            await axios.post(`${BACKEND_URL}/onramp`, { qty: 500 }, authHeader(token));
+            await onramp(token, 500);
 
-            const res = await axios.post(
-                `${BACKEND_URL}/order`,
-                { type: "limit", side: "bid", qty: 5, price: 100, asset: "sol" },
-                authHeader(token)
-            );
-
-            // Should succeed – 5 * 100 = 500, user has exactly 500
+            const res = await placeOrder(token, { side: "bid", qty: 5, price: 100, asset: "sol" });
             expect(res.status).toBe(200);
         });
 
-        test("bid order placed on empty book should lock USD (orderbook_update)", async () => {
+        test("locks USD when a bid rests on an empty book", async () => {
             const { token } = await createUserAndSignin();
-            await axios.post(`${BACKEND_URL}/onramp`, { qty: 1000 }, authHeader(token));
+            await onramp(token, 1000);
+            await placeOrder(token, { side: "bid", qty: 2, price: 50, asset: "sol" });
 
-            await axios.post(
-                `${BACKEND_URL}/order`,
-                { type: "limit", side: "bid", qty: 2, price: 50, asset: "sol" },
-                authHeader(token)
-            );
-
-            const balRes = await axios.get(`${BACKEND_URL}/balance`, authHeader(token));
-            // 2 * 50 = 100 should be moved from available to locked
-            expect(balRes.data.usdBalance).toBe(1000 - 2 * 50);
+            const bal = await getBalance(token);
+            expect(bal.data.usd.available).toBe(1000 - 2 * 50);
         });
     });
 
-    // ----- ASK ORDERS -----
     describe("ask orders", () => {
-        test("ask with insufficient stock should return 411", async () => {
+        test("rejects an ask with insufficient stock", async () => {
             const { token } = await createUserAndSignin();
-            // No stock deposited
 
             try {
-                await axios.post(
-                    `${BACKEND_URL}/order`,
-                    { type: "limit", side: "ask", qty: 1, price: 100, asset: "sol" },
-                    authHeader(token)
-                );
-                expect(true).toBe(false);
+                await placeOrder(token, { side: "ask", qty: 1, price: 100, asset: "sol" });
+                throw new Error("expected request to fail");
             } catch (err) {
-                const error = err as AxiosError<{ message: string }>;
-                expect(error.response?.status).toBe(411);
-                expect(error.response?.data?.message).toBe(
-                    "You have insufficient stocks"
-                );
+                expectStatus(err, 400);
             }
         });
 
-        test("ask order with sufficient stock should succeed", async () => {
+        test("accepts an ask backed by sufficient stock", async () => {
             const { token } = await createUserAndSignin();
-            await axios.post(`${BACKEND_URL}/deposit/sol`, { qty: 10 }, authHeader(token));
+            await deposit(token, "sol", 10);
 
-            const res = await axios.post(
-                `${BACKEND_URL}/order`,
-                { type: "limit", side: "ask", qty: 5, price: 200, asset: "sol" },
-                authHeader(token)
-            );
-
+            const res = await placeOrder(token, { side: "ask", qty: 5, price: 200, asset: "sol" });
             expect(res.status).toBe(200);
         });
     });
 
-    // ----- ORDER MATCHING -----
-    describe("order matching (bid + ask)", () => {
-        test("matching bid and ask should transfer stock and USD between users", async () => {
-            // Seller: has SOL, places an ask
+    describe("order matching", () => {
+        test("a matching bid and ask transfer stock and USD between users", async () => {
             const seller = await createUserAndSignin();
-            await axios.post(
-                `${BACKEND_URL}/deposit/sol`,
-                { qty: 10 },
-                authHeader(seller.token)
-            );
+            await deposit(seller.token, "sol", 10);
+            await placeOrder(seller.token, { side: "ask", qty: 5, price: 100, asset: "sol" });
 
-            await axios.post(
-                `${BACKEND_URL}/order`,
-                { type: "limit", side: "ask", qty: 5, price: 100, asset: "sol" },
-                authHeader(seller.token)
-            );
-
-            // Buyer: has USD, places a matching bid
             const buyer = await createUserAndSignin();
-            await axios.post(
-                `${BACKEND_URL}/onramp`,
-                { qty: 1000 },
-                authHeader(buyer.token)
-            );
+            await onramp(buyer.token, 1000);
+            await placeOrder(buyer.token, { side: "bid", qty: 5, price: 100, asset: "sol" });
 
-            await axios.post(
-                `${BACKEND_URL}/order`,
-                { type: "limit", side: "bid", qty: 5, price: 100, asset: "sol" },
-                authHeader(buyer.token)
-            );
+            const buyerBal = await getBalance(buyer.token);
+            expect(buyerBal.data.usd.available).toBe(500);
+            expect(buyerBal.data.assets.sol.available).toBe(5);
 
-            // Buyer should now have 5 SOL and 1000 - 500 = 500 USD
-            const buyerBal = await axios.get(
-                `${BACKEND_URL}/balance`,
-                authHeader(buyer.token)
-            );
-            expect(buyerBal.data.usdBalance).toBe(500);
-            expect(buyerBal.data.stockBalances["sol"]?.available).toBe(5);
-
-            // Seller should have received 500 USD
-            const sellerBal = await axios.get(
-                `${BACKEND_URL}/balance`,
-                authHeader(seller.token)
-            );
-            expect(sellerBal.data.usdBalance).toBe(500);
+            const sellerBal = await getBalance(seller.token);
+            expect(sellerBal.data.usd.available).toBe(500);
         });
 
-        test("partial fill: bid qty < ask qty should partially fill", async () => {
+        test("a smaller bid partially fills a larger resting ask", async () => {
             const seller = await createUserAndSignin();
-            await axios.post(
-                `${BACKEND_URL}/deposit/sol`,
-                { qty: 20 },
-                authHeader(seller.token)
-            );
+            await deposit(seller.token, "sol", 20);
+            await placeOrder(seller.token, { side: "ask", qty: 10, price: 50, asset: "sol" });
 
-            // Seller offers 10 SOL at $50
-            await axios.post(
-                `${BACKEND_URL}/order`,
-                { type: "limit", side: "ask", qty: 10, price: 50, asset: "sol" },
-                authHeader(seller.token)
-            );
-
-            // Buyer bids for only 3 SOL at $50
             const buyer = await createUserAndSignin();
-            await axios.post(
-                `${BACKEND_URL}/onramp`,
-                { qty: 500 },
-                authHeader(buyer.token)
-            );
+            await onramp(buyer.token, 500);
+            await placeOrder(buyer.token, { side: "bid", qty: 3, price: 50, asset: "sol" });
 
-            await axios.post(
-                `${BACKEND_URL}/order`,
-                { type: "limit", side: "bid", qty: 3, price: 50, asset: "sol" },
-                authHeader(buyer.token)
-            );
-
-            const buyerBal = await axios.get(
-                `${BACKEND_URL}/balance`,
-                authHeader(buyer.token)
-            );
-            // Spent 3 * 50 = 150, so 500 - 150 = 350
-            expect(buyerBal.data.usdBalance).toBe(350);
-            expect(buyerBal.data.stockBalances["sol"]?.available).toBe(3);
+            const buyerBal = await getBalance(buyer.token);
+            expect(buyerBal.data.usd.available).toBe(500 - 3 * 50);
+            expect(buyerBal.data.assets.sol.available).toBe(3);
         });
 
-        test("bid at higher price than ask should still match at ask price", async () => {
+        test("a bid fills at the resting ask price, not its own limit price", async () => {
             const seller = await createUserAndSignin();
-            await axios.post(
-                `${BACKEND_URL}/deposit/sol`,
-                { qty: 10 },
-                authHeader(seller.token)
-            );
+            await deposit(seller.token, "sol", 10);
+            await placeOrder(seller.token, { side: "ask", qty: 2, price: 80, asset: "sol" });
 
-            // Sell at 80
-            await axios.post(
-                `${BACKEND_URL}/order`,
-                { type: "limit", side: "ask", qty: 2, price: 80, asset: "sol" },
-                authHeader(seller.token)
-            );
-
-            // Buy at 100 (willing to pay more)
             const buyer = await createUserAndSignin();
-            await axios.post(
-                `${BACKEND_URL}/onramp`,
-                { qty: 1000 },
-                authHeader(buyer.token)
-            );
+            await onramp(buyer.token, 1000);
+            await placeOrder(buyer.token, { side: "bid", qty: 2, price: 100, asset: "sol" });
 
-            await axios.post(
-                `${BACKEND_URL}/order`,
-                { type: "limit", side: "bid", qty: 2, price: 100, asset: "sol" },
-                authHeader(buyer.token)
-            );
-
-            const buyerBal = await axios.get(
-                `${BACKEND_URL}/balance`,
-                authHeader(buyer.token)
-            );
-            // Should match at ask price (80), so 2 * 80 = 160 spent
-            expect(buyerBal.data.usdBalance).toBe(1000 - 2 * 80);
-            expect(buyerBal.data.stockBalances["sol"]?.available).toBe(2);
+            const buyerBal = await getBalance(buyer.token);
+            expect(buyerBal.data.usd.available).toBe(1000 - 2 * 80);
+            expect(buyerBal.data.assets.sol.available).toBe(2);
         });
 
-        test("no match when bid price < ask price", async () => {
+        test("no match occurs when the bid price is below the ask price", async () => {
             const seller = await createUserAndSignin();
-            await axios.post(
-                `${BACKEND_URL}/deposit/sol`,
-                { qty: 10 },
-                authHeader(seller.token)
-            );
+            await deposit(seller.token, "sol", 10);
+            await placeOrder(seller.token, { side: "ask", qty: 5, price: 200, asset: "sol" });
 
-            // Sell at 200
-            await axios.post(
-                `${BACKEND_URL}/order`,
-                { type: "limit", side: "ask", qty: 5, price: 200, asset: "sol" },
-                authHeader(seller.token)
-            );
-
-            // Buy at 100 (below ask → no match, order goes to book)
             const buyer = await createUserAndSignin();
-            await axios.post(
-                `${BACKEND_URL}/onramp`,
-                { qty: 1000 },
-                authHeader(buyer.token)
-            );
+            await onramp(buyer.token, 1000);
+            await placeOrder(buyer.token, { side: "bid", qty: 2, price: 100, asset: "sol" });
 
-            await axios.post(
-                `${BACKEND_URL}/order`,
-                { type: "limit", side: "bid", qty: 2, price: 100, asset: "sol" },
-                authHeader(buyer.token)
-            );
+            const buyerBal = await getBalance(buyer.token);
+            expect(buyerBal.data.usd.available).toBe(800);
+            expect(buyerBal.data.assets.sol).toBeUndefined();
+        });
 
-            const buyerBal = await axios.get(
-                `${BACKEND_URL}/balance`,
-                authHeader(buyer.token)
-            );
-            // 2 * 100 = 200 locked, 800 available
-            expect(buyerBal.data.usdBalance).toBe(800);
-            // No SOL received
-            expect(buyerBal.data.stockBalances["sol"]).toBeUndefined();
+        test("a bid walks multiple ask price levels, cheapest first", async () => {
+            const seller = await createUserAndSignin();
+            await deposit(seller.token, "sol", 20);
+            await placeOrder(seller.token, { side: "ask", qty: 5, price: 90, asset: "sol" });
+            await placeOrder(seller.token, { side: "ask", qty: 5, price: 100, asset: "sol" });
+
+            const buyer = await createUserAndSignin();
+            await onramp(buyer.token, 10000);
+            await placeOrder(buyer.token, { side: "bid", qty: 8, price: 100, asset: "sol" });
+
+            const buyerBal = await getBalance(buyer.token);
+            expect(buyerBal.data.usd.available).toBe(10000 - (5 * 90 + 3 * 100));
+            expect(buyerBal.data.assets.sol.available).toBe(8);
+        });
+
+        test("an ask walks multiple bid price levels, richest first", async () => {
+            const buyer1 = await createUserAndSignin();
+            await onramp(buyer1.token, 1000);
+            await placeOrder(buyer1.token, { side: "bid", qty: 4, price: 110, asset: "eth" });
+
+            const buyer2 = await createUserAndSignin();
+            await onramp(buyer2.token, 1000);
+            await placeOrder(buyer2.token, { side: "bid", qty: 4, price: 100, asset: "eth" });
+
+            const seller = await createUserAndSignin();
+            await deposit(seller.token, "eth", 6);
+            await placeOrder(seller.token, { side: "ask", qty: 6, price: 90, asset: "eth" });
+
+            const buyer1Bal = await getBalance(buyer1.token);
+            const buyer2Bal = await getBalance(buyer2.token);
+
+            expect(buyer1Bal.data.assets.eth.available).toBe(4);
+            expect(buyer1Bal.data.usd.available).toBe(1000 - 4 * 110);
+
+            expect(buyer2Bal.data.assets.eth.available).toBe(2);
+            expect(buyer2Bal.data.usd.available).toBe(1000 - 200);
+        });
+
+        test("resting orders at the same price fill in time priority", async () => {
+            const sellerA = await createUserAndSignin();
+            await deposit(sellerA.token, "sol", 5);
+            await placeOrder(sellerA.token, { side: "ask", qty: 5, price: 50, asset: "sol" });
+
+            const sellerB = await createUserAndSignin();
+            await deposit(sellerB.token, "sol", 5);
+            await placeOrder(sellerB.token, { side: "ask", qty: 5, price: 50, asset: "sol" });
+
+            const buyer = await createUserAndSignin();
+            await onramp(buyer.token, 1000);
+            await placeOrder(buyer.token, { side: "bid", qty: 5, price: 50, asset: "sol" });
+
+            const sellerABal = await getBalance(sellerA.token);
+            const sellerBBal = await getBalance(sellerB.token);
+
+            expect(sellerABal.data.usd.available).toBe(250);
+            expect(sellerBBal.data.usd.available).toBe(0);
         });
     });
 
-    // ----- AUTH GUARD -----
-    test("order endpoint should reject unauthenticated requests", async () => {
+    describe("input validation", () => {
+        test("rejects negative quantity", async () => {
+            const { token } = await createUserAndSignin();
+            await onramp(token, 1000);
+
+            try {
+                await placeOrder(token, { side: "bid", qty: -5, price: 100, asset: "sol" });
+                throw new Error("expected request to fail");
+            } catch (err) {
+                expectStatus(err, 400);
+            }
+        });
+
+        test("rejects zero quantity", async () => {
+            const { token } = await createUserAndSignin();
+            await onramp(token, 1000);
+
+            try {
+                await placeOrder(token, { side: "bid", qty: 0, price: 100, asset: "sol" });
+                throw new Error("expected request to fail");
+            } catch (err) {
+                expectStatus(err, 400);
+            }
+        });
+
+        test("rejects negative price", async () => {
+            const { token } = await createUserAndSignin();
+            await onramp(token, 1000);
+
+            try {
+                await placeOrder(token, { side: "bid", qty: 1, price: -10, asset: "sol" });
+                throw new Error("expected request to fail");
+            } catch (err) {
+                expectStatus(err, 400);
+            }
+        });
+
+        test("rejects missing required fields", async () => {
+            const { token } = await createUserAndSignin();
+
+            try {
+                await axios.post(
+                    `${BACKEND_URL}/order`,
+                    { side: "bid", qty: 1 },
+                    authHeader(token)
+                );
+                throw new Error("expected request to fail");
+            } catch (err) {
+                expectStatus(err, 400);
+            }
+        });
+    });
+
+    test("rejects unauthenticated requests", async () => {
         try {
             await axios.post(`${BACKEND_URL}/order`, {
                 type: "limit",
@@ -594,10 +515,172 @@ describe("POST /order", () => {
                 price: 100,
                 asset: "sol",
             });
-            expect(true).toBe(false);
+            throw new Error("expected request to fail");
         } catch (err) {
-            const error = err as AxiosError;
-            expect(error.response?.status).toBe(400);
+            expectStatus(err, 400);
         }
+    });
+});
+
+describe("POST /cancel_order", () => {
+    test("cancels a resting bid and refunds locked USD", async () => {
+        const { token } = await createUserAndSignin();
+        await onramp(token, 1000);
+
+        const order = await placeOrder(token, { side: "bid", qty: 5, price: 100, asset: "sol" });
+        const before = await getBalance(token);
+        expect(before.data.usd.available).toBe(500);
+
+        const cancel = await axios.post(
+            `${BACKEND_URL}/cancel_order`,
+            { orderId: order.data.orderId, asset: "sol" },
+            authHeader(token)
+        );
+        expect(cancel.status).toBe(200);
+
+        const after = await getBalance(token);
+        expect(after.data.usd.available).toBe(1000);
+    });
+
+    test("cancels a resting ask and refunds locked stock", async () => {
+        const { token } = await createUserAndSignin();
+        await deposit(token, "sol", 10);
+
+        const order = await placeOrder(token, { side: "ask", qty: 6, price: 200, asset: "sol" });
+        const before = await getBalance(token);
+        expect(before.data.assets.sol.available).toBe(4);
+        expect(before.data.assets.sol.locked).toBe(6);
+
+        await axios.post(
+            `${BACKEND_URL}/cancel_order`,
+            { orderId: order.data.orderId, asset: "sol" },
+            authHeader(token)
+        );
+
+        const after = await getBalance(token);
+        expect(after.data.assets.sol.available).toBe(10);
+        expect(after.data.assets.sol.locked).toBe(0);
+    });
+
+    test("refunds only the remaining quantity of a partially-filled order", async () => {
+        const seller = await createUserAndSignin();
+        await deposit(seller.token, "sol", 10);
+        const order = await placeOrder(seller.token, { side: "ask", qty: 10, price: 100, asset: "sol" });
+
+        const buyer = await createUserAndSignin();
+        await onramp(buyer.token, 1000);
+        await placeOrder(buyer.token, { side: "bid", qty: 4, price: 100, asset: "sol" });
+
+        const mid = await getBalance(seller.token);
+        expect(mid.data.assets.sol.available).toBe(0);
+        expect(mid.data.assets.sol.locked).toBe(6);
+
+        await axios.post(
+            `${BACKEND_URL}/cancel_order`,
+            { orderId: order.data.orderId, asset: "sol" },
+            authHeader(seller.token)
+        );
+
+        const after = await getBalance(seller.token);
+        expect(after.data.assets.sol.locked).toBe(0);
+        expect(after.data.assets.sol.available).toBe(6);
+    });
+
+    test("returns 404 when canceling an already fully-filled order", async () => {
+        const seller = await createUserAndSignin();
+        await deposit(seller.token, "sol", 10);
+        const order = await placeOrder(seller.token, { side: "ask", qty: 5, price: 100, asset: "sol" });
+
+        const buyer = await createUserAndSignin();
+        await onramp(buyer.token, 1000);
+        await placeOrder(buyer.token, { side: "bid", qty: 5, price: 100, asset: "sol" });
+
+        try {
+            await axios.post(
+                `${BACKEND_URL}/cancel_order`,
+                { orderId: order.data.orderId, asset: "sol" },
+                authHeader(seller.token)
+            );
+            throw new Error("expected request to fail");
+        } catch (err) {
+            expectStatus(err, 404);
+        }
+    });
+
+    test("returns 404 when a different user attempts to cancel the order", async () => {
+        const owner = await createUserAndSignin();
+        await onramp(owner.token, 1000);
+        const order = await placeOrder(owner.token, { side: "bid", qty: 5, price: 100, asset: "sol" });
+
+        const attacker = await createUserAndSignin();
+
+        try {
+            await axios.post(
+                `${BACKEND_URL}/cancel_order`,
+                { orderId: order.data.orderId, asset: "sol" },
+                authHeader(attacker.token)
+            );
+            throw new Error("expected request to fail");
+        } catch (err) {
+            expectStatus(err, 404);
+        }
+
+        const ownerBal = await getBalance(owner.token);
+        expect(ownerBal.data.usd.available).toBe(500);
+    });
+
+    test("returns 404 for a non-existent orderId", async () => {
+        const { token } = await createUserAndSignin();
+
+        try {
+            await axios.post(
+                `${BACKEND_URL}/cancel_order`,
+                { orderId: 999999999, asset: "sol" },
+                authHeader(token)
+            );
+            throw new Error("expected request to fail");
+        } catch (err) {
+            expectStatus(err, 404);
+        }
+    });
+
+    test("rejects unauthenticated requests", async () => {
+        try {
+            await axios.post(`${BACKEND_URL}/cancel_order`, { orderId: 1, asset: "sol" });
+            throw new Error("expected request to fail");
+        } catch (err) {
+            expectStatus(err, 400);
+        }
+    });
+});
+
+describe("concurrency", () => {
+    test("concurrent onramps for the same user are all applied", async () => {
+        const { token } = await createUserAndSignin();
+
+        await Promise.all(Array.from({ length: 10 }, () => onramp(token, 10)));
+
+        const bal = await getBalance(token);
+        expect(bal.data.usd.available).toBe(100);
+    });
+
+    test("concurrent bids for the same scarce ask never over-fill it", async () => {
+        const seller = await createUserAndSignin();
+        await deposit(seller.token, "sol", 5);
+        await placeOrder(seller.token, { side: "ask", qty: 5, price: 100, asset: "sol" });
+
+        const buyers = await Promise.all(Array.from({ length: 5 }, () => createUserAndSignin()));
+        await Promise.all(buyers.map((b) => onramp(b.token, 1000)));
+        await Promise.all(
+            buyers.map((b) => placeOrder(b.token, { side: "bid", qty: 5, price: 100, asset: "sol" }))
+        );
+
+        const balances: BalanceResponse[] = await Promise.all(buyers.map((b) => getBalance(b.token)));
+        const totalReceived = balances.reduce(
+            (sum: number, b) => sum + (b.data.assets.sol?.available ?? 0),
+            0
+        );
+
+        expect(totalReceived).toBeLessThanOrEqual(5);
     });
 });

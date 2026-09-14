@@ -20,10 +20,10 @@ import type {
   SignupResponse,
 } from "../types/user";
 
-const client = createClient();
+const client = createClient({ url: process.env.REDIS_URL });
 client.connect();
 
-const receiveClient = createClient();
+const receiveClient = createClient({ url: process.env.REDIS_URL });
 
 const QUEUE_NAME = "queue-" + crypto.randomUUID();
 const CALLBACKS: Record<string, (data: unknown) => void> = {};
@@ -123,8 +123,22 @@ router.post("/signin", async (req, res) => {
   });
 });
 
+function isValidOnRampRequest(body: any): body is OnRampRequest {
+  return (
+    body &&
+    typeof body.qty === "number" && Number.isFinite(body.qty) && body.qty > 0
+  );
+}
+
 router.post("/onramp", authMiddleware, async (req: AuthRequest, res) => {
-  const body = req.body as OnRampRequest;
+  const body = req.body;
+
+  if (!isValidOnRampRequest(body)) {
+    res.status(400).json({ message: "Invalid onramp request" });
+    return;
+  }
+
+  const callbackId = crypto.randomUUID();
 
   await client.lPush(
     "engine-queue",
@@ -134,16 +148,36 @@ router.post("/onramp", authMiddleware, async (req: AuthRequest, res) => {
         userId: req.userId!,
         amount: body.qty,
       },
+      queue: QUEUE_NAME,
+      callbackId,
     }),
   );
 
-  res.json({
-    message: "Onramp request received",
-  });
+  try {
+    await waitForCallback(callbackId);
+    res.json({ message: "Onramp successful" });
+  } catch {
+    res.status(504).json({ message: "Onramp request timed out" });
+  }
 });
 
+function isValidDepositRequest(body: any): body is DepositRequest {
+  return (
+    body &&
+    typeof body.asset === "string" && body.asset.length > 0 &&
+    typeof body.qty === "number" && Number.isFinite(body.qty) && body.qty > 0
+  );
+}
+
 router.post("/deposit", authMiddleware, async (req: AuthRequest, res) => {
-  const body = req.body as DepositRequest;
+  const body = req.body;
+
+  if (!isValidDepositRequest(body)) {
+    res.status(400).json({ message: "Invalid deposit request" });
+    return;
+  }
+
+  const callbackId = crypto.randomUUID();
 
   await client.lPush(
     "engine-queue",
@@ -154,17 +188,45 @@ router.post("/deposit", authMiddleware, async (req: AuthRequest, res) => {
         asset: body.asset,
         qty: body.qty,
       },
+      queue: QUEUE_NAME,
+      callbackId,
     }),
   );
 
-  res.json({
-    message: "Deposit request received",
-  });
+  try {
+    await waitForCallback(callbackId);
+    res.json({ message: "Deposit successful" });
+  } catch {
+    res.status(504).json({ message: "Deposit request timed out" });
+  }
 });
 
+function isValidOrderRequest(body: any): body is OrderRequest {
+    return (
+        body &&
+        body.type === "limit" &&
+        (body.side === "bid" || body.side === "ask") &&
+        (body.asset === "sol" || body.asset === "eth") &&
+        typeof body.qty === "number" &&
+        Number.isFinite(body.qty) &&
+        body.qty > 0 &&
+        typeof body.price === "number" &&
+        Number.isFinite(body.price) &&
+        body.price > 0
+    );
+}
+
 router.post("/order", authMiddleware, async (req: AuthRequest, res) => {
-  const body = req.body as OrderRequest;
-  const callbackId = crypto.randomUUID();
+    const body = req.body;
+
+    if (!isValidOrderRequest(body)) {
+        res.status(400).json({
+            message: "Invalid order request",
+        });
+        return;
+    }
+
+    const callbackId = crypto.randomUUID();
 
   await client.lPush(
     "engine-queue",
@@ -180,7 +242,17 @@ router.post("/order", authMiddleware, async (req: AuthRequest, res) => {
   );
 
   try {
-    const result = await waitForCallback<{ orderId: number; updates: unknown[] }>(callbackId);
+    const result = await waitForCallback<{
+      orderId?: number;
+      updates?: unknown[];
+      error?: string;
+    }>(callbackId);
+
+    if (result.error) {
+      res.status(400).json({ message: result.error });
+      return;
+    }
+
     res.json({
       message: "Order placed",
       orderId: result.orderId,
@@ -191,8 +263,22 @@ router.post("/order", authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
+function isValidCancelOrderRequest(body: any): body is CancelOrderRequest {
+  return (
+    body &&
+    typeof body.orderId === "number" && Number.isFinite(body.orderId) &&
+    typeof body.asset === "string" && body.asset.length > 0
+  );
+}
+
 router.post("/cancel_order", authMiddleware, async (req: AuthRequest, res) => {
-  const body = req.body as CancelOrderRequest;
+  const body = req.body;
+
+  if (!isValidCancelOrderRequest(body)) {
+    res.status(400).json({ message: "Invalid cancel order request" });
+    return;
+  }
+
   const callbackId = crypto.randomUUID();
 
   await client.lPush(

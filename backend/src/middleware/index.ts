@@ -30,3 +30,4 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
         });
     }
 }
+

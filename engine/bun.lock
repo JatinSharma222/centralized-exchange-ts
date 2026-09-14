@@ -6,6 +6,7 @@
       "name": "engine",
       "dependencies": {
         "@types/redis": "^4.0.11",
+        "redis": "^6.2.1",
       },
       "devDependencies": {
         "@types/bun": "latest",

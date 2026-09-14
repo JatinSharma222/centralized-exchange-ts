@@ -39,8 +39,8 @@ export interface DepositRequest {
 export interface OrderRequest {
     type: "limit",
     side: "bid" | "ask",
-    qty: number,
     price: number,
+    qty: number,
     asset: "sol" | "eth"
 }
 

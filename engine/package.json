@@ -9,7 +9,14 @@
   "peerDependencies": {
     "typescript": "^5"
   },
+
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts"
+  },
+  
   "dependencies": {
-    "@types/redis": "^4.0.11"
+    "@types/redis": "^4.0.11",
+    "redis": "^6.2.1"
   }
 }
