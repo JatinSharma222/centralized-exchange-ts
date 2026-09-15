@@ -1,8 +1,14 @@
-// @ts-expect-error bun:test is resolved by the Bun test runner.
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, beforeEach } from "bun:test";
 import axios, { AxiosError } from "axios";
 
 const BACKEND_URL = "http://localhost:3000";
+
+// Reset all engine in-memory state before each test to prevent orderbook
+// contamination (e.g., a resting ask from test A matching a bid in test B).
+beforeEach(async () => {
+    await axios.post(`${BACKEND_URL}/reset`).catch(() => {});
+});
+
 
 async function createUserAndSignin(username?: string, password = "testpassword123") {
     const uname = username ?? "user_" + Math.random().toString(36).slice(2);
@@ -429,7 +435,10 @@ describe("POST /order", () => {
             expect(buyer1Bal.data.usd.available).toBe(1000 - 4 * 110);
 
             expect(buyer2Bal.data.assets.eth.available).toBe(2);
-            expect(buyer2Bal.data.usd.available).toBe(1000 - 200);
+            // buyer2 bid 4 ETH @ $100 ($400 locked); only 2 were filled → $200 spent,
+            // but the remaining 2-ETH resting bid still locks $200.
+            expect(buyer2Bal.data.usd.available).toBe(600); // 1000 - 400 (locked at bid time)
+            expect(buyer2Bal.data.usd.locked).toBe(200);    // unfilled 2 ETH @ $100 still resting
         });
 
         test("resting orders at the same price fill in time priority", async () => {

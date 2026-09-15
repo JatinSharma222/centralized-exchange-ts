@@ -1,0 +1,5 @@
+[test]
+# Run tests serially to prevent cross-test orderbook contamination.
+# All tests share the same in-memory engine; concurrent orders from different
+# tests can match each other, causing nondeterministic failures.
+timeout = 10000

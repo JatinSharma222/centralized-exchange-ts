@@ -213,6 +213,14 @@ client.connect().then(async () => {
       const balance = { usd, assets };
       await respond(parsedData.queue, parsedData.callbackId, { balance });
     }
+
+    if (parsedData.type === "reset") {
+      usdBalances.clear();
+      stockBalances.clear();
+      orderbooks.clear();
+      nextOrderId = 1;
+      await respond(parsedData.queue, parsedData.callbackId, { success: true });
+    }
   } catch (err) {
     console.error("Failed to process message:", err);
     if (parsedData?.queue && parsedData?.callbackId) {

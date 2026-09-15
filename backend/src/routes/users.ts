@@ -330,6 +330,28 @@ router.get("/balance", authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
+router.post("/reset", async (_req, res) => {
+  const callbackId = crypto.randomUUID();
+
+  await client.lPush(
+    "engine-queue",
+    JSON.stringify({
+      type: "reset",
+      payload: {},
+      queue: QUEUE_NAME,
+      callbackId,
+    }),
+  );
+
+  try {
+    await waitForCallback(callbackId);
+    res.json({ message: "Engine state reset" });
+  } catch {
+    res.status(504).json({ message: "Reset timed out" });
+  }
+});
+
+
 receiveClient.connect().then(async () => {
   while (1) {
     const res = await receiveClient.blPop(QUEUE_NAME, 1);

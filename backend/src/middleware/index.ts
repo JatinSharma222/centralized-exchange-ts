@@ -11,7 +11,15 @@ export interface AuthRequest extends Request {
 
 export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
     const header = req.headers["authorization"];
-    const token = header?.replace(/^Bearer\s+/i, "").trim();
+
+    if (!header || !header.match(/^Bearer\s+/i)) {
+        res.status(400).json({
+            message: "Invalid or missing token"
+        });
+        return;
+    }
+
+    const token = header.replace(/^Bearer\s+/i, "").trim();
 
     if (!token) {
         res.status(400).json({
@@ -30,4 +38,3 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
         });
     }
 }
-
